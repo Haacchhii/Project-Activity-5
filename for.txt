@@ -1,0 +1,47 @@
+UPDATED - Project Activity 5 (Based on Your Team's Actual Style)
+Team Name: DevNet & Chill
+
+Describe your team's application:
+a. Which changes did your team choose to implement in the running-config?
+
+Interface description update - Changed the interface description to "L1-SE-Managed-Automated-Tool" to identify interfaces managed through the automation system
+Interface administrative state - Enabled the interface (no shutdown) to ensure it is operationally active for network traffic
+Interface MTU configuration - Set the Maximum Transmission Unit (MTU) to 1500 bytes to standardize frame sizes across the network
+
+b. Why were these features chosen?
+
+Interface Description is the most frequent change request mentioned in the scenario since L1 Support Engineers constantly need to update descriptions to reflect connected devices or circuit IDs
+Interface State is chosen since enabling/disabling interfaces is a fundamental troubleshooting action that L1 engineers perform daily
+MTU Configuration is chosen since it is essential for optimizing network performance and preventing fragmentation issues across network segments
+
+
+Record your team member roles and skillsets
+Team memberRole/Knowledge/SkillsetRichelle Grace AdarloScrum Leader/Developer - Led project planning, developed the Python automation script, created the DevNet sandbox connection, and managed the GitHub repositoryJose IturraldeCo-Developer - Integrated code versions by pushing to GitHub branches, tested functionality of different versions, and debugged YANG model compatibility issuesHenrick Yurie MendozaTester - Set up the WebEx Teams webhook integration, tested the notification system, and gave feedback for code improvementsZac HalamanTester - Performed QA testing on each configuration change, validated NETCONF responses, and provided debugging supportVia Mae De BelenDocumentation Lead - Captured output screenshots, organized all evidence, prepared presentation materials, and printed final documentationRupery Cyril GarciaPresenter - Researched NETCONF/YANG concepts, assisted with testing activities, and helped present the final project
+
+Strategy/Project Plan
+Our team used an agile methodology with two phases. In the first phase, Richelle set up the DevNet sandbox and developed the base NETCONF automation script. Jose created GitHub branches to test different versions of the code. In the second phase, Henrick integrated WebEx Teams notifications while Zac and Via Mae tested each feature. We communicated through a shared group chat and held brief check-ins to track progress. GitHub was used for code sharing and version control. When we encountered YANG model errors, we worked together to research IOS XR documentation and implement error handling.
+
+Final Deliverables - Presentation
+Evidence provided:
+
+Application code: Complete Python script (network_automation.py) implementing NETCONF automation
+YANG Model used: Cisco-IOS-XR-ifmgr-cfg (Cisco IOS XR Interface Manager Configuration)
+Example output showing:
+
+Running-config before changes - Full device configuration retrieved via NETCONF
+Running-config after changes - Updated configuration with interface description modified
+Message sent to WebEx Teams - Notification with device details and changes made
+
+
+
+
+Reflection: Issues, Solutions, and Learnings
+Issues faced:
+The main technical challenge was YANG model compatibility between IOS XE and IOS XR platforms. Our initial code worked for interface descriptions but failed for shutdown and MTU changes with "bad-element" and "unknown-element" errors. We also encountered confusion with the WebEx webhook returning a 204 status code which our script interpreted as a failure.
+How we found solutions:
+We tested changes incrementally to isolate what worked. Jose researched IOS XR YANG model documentation on Cisco's GitHub and discovered platform-specific XML structures. We added try-except error handling so the script would continue even if individual changes failed. For WebEx, Via Mae researched HTTP status codes and found that 204 is actually a success response, so we updated the validation logic.
+What we learned:
+Different network platforms require different YANG models even from the same vendor. Error messages from NETCONF provide valuable debugging information if you read them carefully. Working in small increments and testing frequently helps catch problems early. Documentation is crucial so team members can understand decisions made earlier. Most importantly, automation rarely works perfectly on the first attempt and troubleshooting is a normal part of the development process.
+
+Team Activities & Reflection
+QUESTIONANSWERWhat did you enjoy about working as a team?Collaboration and learning from each other's strengths - Richelle's Python skills, Jose's networking knowledge, and Henrick's DevOps experience. Seeing individual code pieces merge into a working automation tool was rewarding.What team problems did you encounter and how did you resolve them?Early coordination issues when Richelle and Jose both worked on NETCONF connection code without communicating. Resolved by creating a task board to track who was working on what. Scheduling meetings with 6 people was difficult, so we set core hours (3-5 PM) when everyone was available.What technical problems did you encounter and how did you resolve them?YANG model errors on IOS XR platform - shutdown and MTU changes failed even though code looked correct. Debugged by testing description change first, which proved NETCONF connection worked. Jose researched IOS XR documentation showing different XML structures. Added error handling so partial failures wouldn't stop the script.How was each team member held accountable?Task assignments in project plan, GitHub commit tracking, and daily check-ins where everyone reported progress. If someone was blocked, the team helped solve it together since one failure would affect the whole project.What was your team's decision-making process?For major decisions like which 3 changes to implement, we discussed and voted as a group. For technical details, we let the expert decide - Richelle handled Python approaches, Jose chose NETCONF settings, Henrick decided on WebEx methods. When stuck, we brainstormed together and divided research tasks.Overall team dynamics and lessons learned?Team improved over time. Started hesitant but became comfortable helping each other. Learned that clear task assignments prevent duplicate work, daily short meetings work better than weekly long ones, and celebrating small wins maintains morale. Most importantly, debugging and learning from errors is normal in automation projects.

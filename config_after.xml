@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<rpc-reply message-id="urn:uuid:6a7565dd-3ce2-4656-bc36-6ca348b7379a" xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
+<rpc-reply message-id="urn:uuid:ac90e6d0-2053-43f0-a584-fff79fa91c86" xmlns:nc="urn:ietf:params:xml:ns:netconf:base:1.0" xmlns="urn:ietf:params:xml:ns:netconf:base:1.0">
  <data>
   <router-static xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-ip-static-cfg">
    <default-vrf>
@@ -130,7 +130,7 @@ your favorite CISCO.IOSXR.IOSXR Sandbox&quot;</banner-text>
    <interface-configuration>
     <active>act</active>
     <interface-name>GigabitEthernet0/0/0/0</interface-name>
-    <description>Link to Router</description>
+    <description>Link</description>
     <ipv6-network xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-ipv6-ma-cfg">
      <addresses>
       <link-local-address>
@@ -587,7 +587,7 @@ your favorite CISCO.IOSXR.IOSXR Sandbox&quot;</banner-text>
    </interface>
    <interface>
     <interface-name>GigabitEthernet0/0/0/0</interface-name>
-    <description>Link to Router</description>
+    <description>Link</description>
     <ipv6>
      <addresses xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-um-if-ip-address-cfg">
       <link-local-address>
@@ -1416,7 +1416,7 @@ your favorite CISCO.IOSXR.IOSXR Sandbox&quot;</banner-text>
      <name>GigabitEthernet0/0/0/0</name>
      <type xmlns:idx="urn:ietf:params:xml:ns:yang:iana-if-type">idx:ethernetCsmacd</type>
      <enabled>false</enabled>
-     <description>Link to Router</description>
+     <description>Link</description>
     </config>
     <ethernet xmlns="http://openconfig.net/yang/interfaces/ethernet">
      <config>

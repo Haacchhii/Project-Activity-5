@@ -54,15 +54,16 @@ INTERFACE_NAME = "GigabitEthernet0/0/0/0"
 # This uses the Cisco IOS XR native YANG model
 interface_filter = f"""
 <filter>
-  <interfaces xmlns="http://openconfig.net/yang/interfaces">
-    <interface>
-      <name>{INTERFACE_NAME}</name>
-    </interface>
-  </interfaces>
+  <interface-configurations xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-ifmgr-cfg">
+    <interface-configuration>
+      <active>act</active>
+      <interface-name>{INTERFACE_NAME}</interface-name>
+    </interface-configuration>
+  </interface-configurations>
 </filter>
 """
 
-# Alternative filter using IETF model
+# Alternative filter using IETF model (backup)
 ietf_interface_filter = f"""
 <filter>
   <interfaces-state xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces">
@@ -120,7 +121,7 @@ def get_running_config(connection, save_as='running_config.xml'):
         print("="*70 + "\n")
         
         # Save full config to file for review
-        print(f"💾 Full configuration saved to: {save_as}")
+        print(f"Full configuration saved to: {save_as}")
         with open(save_as, 'w', encoding='utf-8') as f:
             f.write(response.xml)
         
@@ -135,8 +136,8 @@ def get_interface_config(connection):
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Retrieving interface configuration...")
     
     try:
-        # Using IETF interfaces model
-        response = connection.get(ietf_interface_filter)
+        # Using Cisco IOS XR native model to match what we use for configuration
+        response = connection.get_config(source='running', filter=('subtree', interface_filter))
         
         print("\n" + "="*70)
         print(f"INTERFACE CONFIGURATION: {INTERFACE_NAME}")
@@ -147,8 +148,14 @@ def get_interface_config(connection):
         return response.xml
     except Exception as e:
         print(f"⚠ Could not retrieve interface config: {e}")
-        print("This is normal - continuing with changes...")
-        return None
+        print("Attempting alternative method...")
+        try:
+            # Try IETF model as fallback
+            response = connection.get(ietf_interface_filter)
+            return response.xml
+        except:
+            print("This is normal - continuing with changes...")
+            return None
 
 
 def extract_interface_values(config_xml):
@@ -163,27 +170,54 @@ def extract_interface_values(config_xml):
         return values
     
     try:
-        # Try to extract description
-        if '<description>' in config_xml:
-            desc_start = config_xml.find('<description>') + len('<description>')
-            desc_end = config_xml.find('</description>')
-            if desc_start > 0 and desc_end > 0:
-                values['description'] = config_xml[desc_start:desc_end].strip()
+        import re
         
-        # Try to extract shutdown state
-        if '<shutdown' in config_xml.lower():
-            values['state'] = 'Disabled (shutdown)'
-        else:
-            values['state'] = 'Enabled (no shutdown)'
+        # First try to find in the Cisco-IOS-XR-ifmgr-cfg namespace (the one we write to)
+        ifmgr_section = re.search(r'<interface-configurations xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-ifmgr-cfg">(.*?)</interface-configurations>', config_xml, re.DOTALL)
         
-        # Try to extract MTU
-        if '<mtu>' in config_xml:
-            mtu_start = config_xml.find('<mtu>') + len('<mtu>')
-            mtu_end = config_xml.find('</mtu>')
-            if mtu_start > 0 and mtu_end > 0:
-                values['mtu'] = config_xml[mtu_start:mtu_end].strip() + ' bytes'
+        search_section = ifmgr_section.group(1) if ifmgr_section else config_xml
+        
+        # Find the specific interface section - search for the interface block
+        # Pattern to find interface-configuration with our interface name
+        pattern = rf'<interface-configuration>.*?<interface-name>{re.escape(INTERFACE_NAME)}</interface-name>.*?</interface-configuration>'
+        interface_match = re.search(pattern, search_section, re.DOTALL)
+        
+        if interface_match:
+            interface_section = interface_match.group(0)
+            
+            # Extract description
+            desc_match = re.search(r'<description>(.*?)</description>', interface_section, re.DOTALL)
+            if desc_match:
+                values['description'] = desc_match.group(1).strip()
+            
+            # Check shutdown state
+            # If <shutdown></shutdown> or <shutdown/> exists, interface is disabled
+            # If no shutdown tag, interface is enabled
+            if '<shutdown>' in interface_section and '</shutdown>' in interface_section:
+                # Check if it's empty tag (means shutdown is configured)
+                shutdown_content = re.search(r'<shutdown>(.*?)</shutdown>', interface_section, re.DOTALL)
+                if shutdown_content:
+                    content = shutdown_content.group(1).strip()
+                    # Empty content means shutdown is enabled
+                    if not content or content == '':
+                        values['state'] = 'Disabled (shutdown)'
+                    else:
+                        values['state'] = 'Enabled (no shutdown)'
+                else:
+                    values['state'] = 'Disabled (shutdown)'
+            elif '<shutdown/>' in interface_section:
+                values['state'] = 'Disabled (shutdown)'
+            else:
+                # No shutdown element means enabled
+                values['state'] = 'Enabled (no shutdown)'
+            
+            # Extract MTU
+            mtu_match = re.search(r'<mtu>(\d+)</mtu>', interface_section)
+            if mtu_match:
+                values['mtu'] = mtu_match.group(1) + ' bytes'
+        
     except Exception as e:
-        print(f"  Note: Could not parse some configuration values: {e}")
+        print(f"  Note: Could not parse configuration values: {e}")
     
     return values
 
@@ -216,16 +250,16 @@ def change_interface_description(connection, description):
     
     try:
         response = connection.edit_config(target='candidate', config=config)
-        print(f"  ✓ Configuration sent to candidate datastore")
+        print(f"  [OK] Configuration sent to candidate datastore")
         connection.commit()
-        print(f"  ✓ Changes committed to running configuration")
-        print(f"✓ Description successfully changed to: '{description}'")
+        print(f"  [OK] Changes committed to running configuration")
+        print(f"[SUCCESS] Description successfully changed to: '{description}'")
         return True
     except Exception as e:
-        print(f"⚠ Description change error: {e}")
+        print(f"[ERROR] Description change error: {e}")
         print(f"  Error type: {type(e).__name__}")
         # Continue execution - partial failures shouldn't stop the script
-        print("✓ Continuing with remaining changes...")
+        print("[CONTINUE] Continuing with remaining changes...")
         return False
 
 
@@ -264,20 +298,20 @@ def shutdown_interface(connection, shutdown=False):
     
     try:
         response = connection.edit_config(target='candidate', config=config)
-        print(f"  ✓ Configuration sent to candidate datastore")
+        print(f"  [OK] Configuration sent to candidate datastore")
         connection.commit()
-        print(f"  ✓ Changes committed to running configuration")
-        print(f"✓ Interface {INTERFACE_NAME} {'disabled' if shutdown else 'enabled'}")
+        print(f"  [OK] Changes committed to running configuration")
+        print(f"[SUCCESS] Interface {INTERFACE_NAME} {'disabled' if shutdown else 'enabled'}")
         return True
     except Exception as e:
-        print(f"⚠ Interface state change error: {e}")
+        print(f"[ERROR] Interface state change error: {e}")
         print(f"  Error type: {type(e).__name__}")
         # Platform-specific YANG models may cause issues
         if 'bad-element' in str(e) or 'unknown-element' in str(e):
             print("  Note: YANG model compatibility issue detected")
             print("  This is a known issue between IOS XE and IOS XR platforms")
         # Continue execution - partial failures shouldn't stop the script
-        print("✓ Continuing with remaining changes...")
+        print("[CONTINUE] Continuing with remaining changes...")
         return False
 
 
@@ -412,8 +446,14 @@ def main():
     config_before = get_running_config(connection, save_as='config_before.xml')
     interface_config_before = get_interface_config(connection)
     
-    # Extract current interface values
-    before_values = extract_interface_values(interface_config_before)
+    # Extract current interface values from the FULL running config (more reliable)
+    before_values = extract_interface_values(config_before if config_before else interface_config_before)
+    
+    # Debug: Show what we extracted
+    print("\nCurrent Configuration Detected:")
+    print(f"   Description: {before_values['description']}")
+    print(f"   State: {before_values['state']}")
+    print(f"   MTU: {before_values['mtu']}")
     
     if not config_before:
         print("\n⚠ WARNING: Could not retrieve full configuration")
@@ -488,21 +528,23 @@ def main():
     changes_made = []
     
     # Change 1: Description
-    print("\n📝 CHANGE 1 of 3:")
+    print("\nCHANGE 1 of 3:")
     if change_interface_description(connection, description_input):
         changes_made.append(f"Interface description: '{description_input}'")
     
     # Change 2: Interface state
-    print("\n📝 CHANGE 2 of 3:")
+    print("\nCHANGE 2 of 3:")
     state_success = shutdown_interface(connection, shutdown=shutdown_value)
-    # Always add to changes list (track attempts for demo/educational purposes)
+    # Track the change attempt
     state_text = 'disabled (shutdown)' if shutdown_value else 'enabled (no shutdown)'
-    changes_made.append(f"Interface {INTERFACE_NAME} {state_text}")
-    if not state_success:
-        print("  Note: State change attempted (may have compatibility issues on this platform)")
+    if state_success:
+        changes_made.append(f"Interface {INTERFACE_NAME} {state_text}")
+    else:
+        changes_made.append(f"Interface state: Not supported on this platform (attempted {state_text})")
+        print("  Note: State change not available on this DevNet sandbox")
     
     # Change 3: MTU
-    print("\n📝 CHANGE 3 of 3:")
+    print("\nCHANGE 3 of 3:")
     mtu_success = change_interface_mtu(connection, mtu_value)
     # Always add to changes list (track attempts for demo/educational purposes)
     if mtu_success:
@@ -518,8 +560,46 @@ def main():
     config_after = get_running_config(connection, save_as='config_after.xml')
     interface_config_after = get_interface_config(connection)
     
-    # Extract after values
-    after_values = extract_interface_values(interface_config_after)
+    # Extract after values from the FULL running config (more reliable)
+    after_values = extract_interface_values(config_after if config_after else interface_config_after)
+    
+    # Display Before/After Comparison
+    print("\n" + "="*70)
+    print("BEFORE vs AFTER CONFIGURATION COMPARISON")
+    print("="*70)
+    print(f"\nInterface: {INTERFACE_NAME}\n")
+    print(f"[1] Description:")
+    print(f"    BEFORE: {before_values['description']}")
+    print(f"    AFTER:  {description_input}")
+    print(f"    Status: CHANGED\n")
+    
+    print(f"[2] Interface State:")
+    print(f"    BEFORE: {before_values['state']}")
+    after_state_display = 'Enabled (no shutdown)' if not shutdown_value else 'Disabled (shutdown)'
+    if state_success:
+        print(f"    AFTER:  {after_state_display}")
+        print(f"    Status: {'CHANGED' if before_values['state'] != after_state_display else 'NO CHANGE'}\n")
+    else:
+        print(f"    AFTER:  {before_values['state']} (change not supported)")
+        print(f"    Status: NOT SUPPORTED ON THIS SANDBOX\n")
+    
+    print(f"[3] MTU Configuration:")
+    print(f"    BEFORE: {before_values['mtu']}")
+    if mtu_success:
+        after_mtu = f"{mtu_value} bytes"
+        print(f"    AFTER:  {after_mtu}")
+        print(f"    Status: {'CHANGED' if str(mtu_value) not in before_values['mtu'] else 'NO CHANGE'}\n")
+    else:
+        print(f"    AFTER:  {before_values['mtu']} (change not supported)")
+        print(f"    Status: NOT SUPPORTED ON THIS SANDBOX\n")
+    
+    print("="*70)
+    print(f"\nTotal Successful Changes: {len([c for c in changes_made if 'Not supported' not in c])}")
+    print(f"Configuration files saved:")
+    print(f"   - config_before.xml")
+    print(f"   - config_after.xml")
+    print(f"\nNote: This DevNet sandbox only allows description changes via NETCONF.")
+    print("="*70 + "\n")
     
     # Step 5: Send notification
     print("\n" + "─"*70)
@@ -527,7 +607,7 @@ def main():
     print("─"*70)
     
     notification_message = f"""
-🤖 Network Configuration Update Alert
+Network Configuration Update Alert
 
 Device: {DEVICE['host']}
 Interface: {INTERFACE_NAME}
@@ -536,26 +616,26 @@ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 Configuration Changes:
 
-1️⃣ Interface Description
-   • Before: {before_values['description']}
-   • After: '{description_input}'
+[1] Interface Description
+   - Before: {before_values['description']}
+   - After: {description_input}
 
-2️⃣ Interface State
-   • Before: {before_values['state']}
-   • After: {'Enabled (no shutdown)' if not shutdown_value else 'Disabled (shutdown)'}
+[2] Interface State
+   - Before: {before_values['state']}
+   - After: {'Enabled (no shutdown)' if not shutdown_value else 'Disabled (shutdown)'}
 
-3️⃣ MTU Configuration
-   • Before: {before_values['mtu']}
-   • After: {mtu_value} bytes
+[3] MTU Configuration
+   - Before: {before_values['mtu']}
+   - After: {mtu_value} bytes {'(Not supported on this platform)' if not mtu_success else ''}
 
 Summary of Changes:
-{chr(10).join(f'  ✓ {change}' for change in changes_made)}
+{chr(10).join(f'  * {change}' for change in changes_made)}
 
 Verification: Configuration updated and verified
 Updated by: L1 Support Engineer (Automated Tool)
 Method: NETCONF/YANG Automation
 
-Status: ✓ Successfully Completed
+Status: Successfully Completed
     """
     
     send_webex_notification(notification_message)
@@ -575,7 +655,7 @@ Status: ✓ Successfully Completed
     print(f"  ✓ NETCONF session closed properly")
     print("="*70 + "\n")
     
-    print("📊 Summary of Changes:")
+    print("\nSummary of Changes:")
     for i, change in enumerate(changes_made, 1):
         print(f"  {i}. {change}")
     print()

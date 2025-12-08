@@ -34,6 +34,8 @@ import xmltodict
 import json
 import requests
 from datetime import datetime
+import os
+import glob
 
 # ============ CONFIGURATION ============
 # Device credentials (DevNet IOS XR Sandbox)
@@ -76,6 +78,144 @@ ietf_interface_filter = f"""
 
 # ============ FUNCTIONS ============
 
+def extract_interface_values(config_xml):
+    """Extract current interface description, state, and MTU from config XML"""
+    values = {
+        'description': 'Not set',
+        'state': 'Unknown',
+        'mtu': 'Not set'
+    }
+
+    if not config_xml:
+        return values
+
+    try:
+        import re
+
+        # First try to find in the Cisco-IOS-XR-ifmgr-cfg namespace (the one we write to)
+        ifmgr_section = re.search(r'<interface-configurations xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-ifmgr-cfg">(.*?)</interface-configurations>', config_xml, re.DOTALL)
+
+        search_section = ifmgr_section.group(1) if ifmgr_section else config_xml
+
+        # Find ALL interface-configuration blocks and search for the one with our interface name
+        # This prevents matching across multiple interfaces
+        all_interfaces = re.findall(r'<interface-configuration>(.*?)</interface-configuration>', search_section, re.DOTALL)
+
+        interface_section = None
+        for interface_block in all_interfaces:
+            # Check if this block contains our interface name
+            if f'<interface-name>{INTERFACE_NAME}</interface-name>' in interface_block:
+                interface_section = interface_block
+                break
+
+        if interface_section:
+
+            # Extract description
+            desc_match = re.search(r'<description>(.*?)</description>', interface_section, re.DOTALL)
+            if desc_match:
+                values['description'] = desc_match.group(1).strip()
+
+            # Check shutdown state
+            # If <shutdown></shutdown> or <shutdown/> exists, interface is disabled
+            # If no shutdown tag, interface is enabled
+            if '<shutdown>' in interface_section and '</shutdown>' in interface_section:
+                # Check if it's empty tag (means shutdown is configured)
+                shutdown_content = re.search(r'<shutdown>(.*?)</shutdown>', interface_section, re.DOTALL)
+                if shutdown_content:
+                    content = shutdown_content.group(1).strip()
+                    # Empty content means shutdown is enabled
+                    if not content or content == '':
+                        values['state'] = 'Disabled (shutdown)'
+                    else:
+                        values['state'] = 'Enabled (no shutdown)'
+                else:
+                    values['state'] = 'Disabled (shutdown)'
+            elif '<shutdown/>' in interface_section:
+                values['state'] = 'Disabled (shutdown)'
+            else:
+                # No shutdown element means enabled
+                values['state'] = 'Enabled (no shutdown)'
+
+            # Extract MTU
+            mtu_match = re.search(r'<mtu>(\d+)</mtu>', interface_section)
+            if mtu_match:
+                values['mtu'] = mtu_match.group(1) + ' bytes'
+
+    except Exception as e:
+        print(f"  Note: Could not parse configuration values: {e}")
+
+    return values
+
+
+def get_last_run_info():
+    """
+    Retrieve and display information from the last program run
+    Returns the last 'before' configuration values if available
+    """
+    # Look for the most recent timestamped backup
+    backup_files = glob.glob('config_before_*.xml')
+
+    if not backup_files:
+        # Fall back to the standard config_before.xml if no timestamped backups exist
+        if os.path.exists('config_before.xml'):
+            print("\n" + "="*70)
+            print("PREVIOUS RUN DETECTED")
+            print("="*70)
+            print("Found configuration from last run: config_before.xml")
+
+            try:
+                with open('config_before.xml', 'r', encoding='utf-8') as f:
+                    last_config = f.read()
+
+                # Extract values from last run
+                last_values = extract_interface_values(last_config)
+
+                print("\nLast 'BEFORE' Configuration (from previous run):")
+                print(f"   Description: {last_values['description']}")
+                print(f"   State: {last_values['state']}")
+                print(f"   MTU: {last_values['mtu']}")
+                print("="*70 + "\n")
+
+                return last_values
+            except Exception as e:
+                print(f"   Note: Could not read last configuration: {e}")
+                print("="*70 + "\n")
+                return None
+        return None
+
+    # Find the most recent backup
+    backup_files.sort(reverse=True)  # Most recent first
+    latest_backup = backup_files[0]
+
+    # Extract timestamp from filename
+    timestamp_str = latest_backup.replace('config_before_', '').replace('.xml', '')
+
+    print("\n" + "="*70)
+    print("PREVIOUS RUN DETECTED")
+    print("="*70)
+    print(f"Found configuration from last run: {latest_backup}")
+    print(f"Timestamp: {timestamp_str}")
+
+    try:
+        with open(latest_backup, 'r', encoding='utf-8') as f:
+            last_config = f.read()
+
+        # Extract values from last run
+        last_values = extract_interface_values(last_config)
+
+        print("\nLast 'BEFORE' Configuration (from previous run):")
+        print(f"   Description: {last_values['description']}")
+        print(f"   State: {last_values['state']}")
+        print(f"   MTU: {last_values['mtu']}")
+        print("="*70 + "\n")
+
+        return last_values
+    except Exception as e:
+        print(f"   Note: Could not read last configuration: {e}")
+        print("="*70 + "\n")
+        return None
+
+
 def connect_to_device():
     """Establish NETCONF connection to network device"""
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Connecting to {DEVICE['host']}...")
@@ -100,31 +240,39 @@ def connect_to_device():
         return None
 
 
-def get_running_config(connection, save_as='running_config.xml'):
+def get_running_config(connection, save_as='running_config.xml', create_backup=False):
     """Retrieve current running configuration"""
     print(f"\n[{datetime.now().strftime('%H:%M:%S')}] Retrieving running configuration...")
-    
+
     try:
         # Get the full running config
         response = connection.get_config(source='running')
-        
+
         # Parse and display
         print("\n" + "="*70)
         print("CURRENT RUNNING CONFIGURATION (Sample)")
         print("="*70)
-        
+
         # Show first 2000 characters of config
         config_preview = response.xml[:2000]
         print(config_preview)
         print("\n... (configuration truncated for display) ...")
         print(f"Total config size: {len(response.xml)} characters")
         print("="*70 + "\n")
-        
+
         # Save full config to file for review
         print(f"Full configuration saved to: {save_as}")
         with open(save_as, 'w', encoding='utf-8') as f:
             f.write(response.xml)
-        
+
+        # Create timestamped backup for history tracking
+        if create_backup:
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_name = save_as.replace('.xml', f'_{timestamp}.xml')
+            with open(backup_name, 'w', encoding='utf-8') as f:
+                f.write(response.xml)
+            print(f"Timestamped backup saved to: {backup_name}")
+
         return response.xml
     except Exception as e:
         print(f"✗ Failed to retrieve config: {e}")
@@ -156,70 +304,6 @@ def get_interface_config(connection):
         except:
             print("This is normal - continuing with changes...")
             return None
-
-
-def extract_interface_values(config_xml):
-    """Extract current interface description, state, and MTU from config XML"""
-    values = {
-        'description': 'Not set',
-        'state': 'Unknown',
-        'mtu': 'Not set'
-    }
-    
-    if not config_xml:
-        return values
-    
-    try:
-        import re
-        
-        # First try to find in the Cisco-IOS-XR-ifmgr-cfg namespace (the one we write to)
-        ifmgr_section = re.search(r'<interface-configurations xmlns="http://cisco.com/ns/yang/Cisco-IOS-XR-ifmgr-cfg">(.*?)</interface-configurations>', config_xml, re.DOTALL)
-        
-        search_section = ifmgr_section.group(1) if ifmgr_section else config_xml
-        
-        # Find the specific interface section - search for the interface block
-        # Pattern to find interface-configuration with our interface name
-        pattern = rf'<interface-configuration>.*?<interface-name>{re.escape(INTERFACE_NAME)}</interface-name>.*?</interface-configuration>'
-        interface_match = re.search(pattern, search_section, re.DOTALL)
-        
-        if interface_match:
-            interface_section = interface_match.group(0)
-            
-            # Extract description
-            desc_match = re.search(r'<description>(.*?)</description>', interface_section, re.DOTALL)
-            if desc_match:
-                values['description'] = desc_match.group(1).strip()
-            
-            # Check shutdown state
-            # If <shutdown></shutdown> or <shutdown/> exists, interface is disabled
-            # If no shutdown tag, interface is enabled
-            if '<shutdown>' in interface_section and '</shutdown>' in interface_section:
-                # Check if it's empty tag (means shutdown is configured)
-                shutdown_content = re.search(r'<shutdown>(.*?)</shutdown>', interface_section, re.DOTALL)
-                if shutdown_content:
-                    content = shutdown_content.group(1).strip()
-                    # Empty content means shutdown is enabled
-                    if not content or content == '':
-                        values['state'] = 'Disabled (shutdown)'
-                    else:
-                        values['state'] = 'Enabled (no shutdown)'
-                else:
-                    values['state'] = 'Disabled (shutdown)'
-            elif '<shutdown/>' in interface_section:
-                values['state'] = 'Disabled (shutdown)'
-            else:
-                # No shutdown element means enabled
-                values['state'] = 'Enabled (no shutdown)'
-            
-            # Extract MTU
-            mtu_match = re.search(r'<mtu>(\d+)</mtu>', interface_section)
-            if mtu_match:
-                values['mtu'] = mtu_match.group(1) + ' bytes'
-        
-    except Exception as e:
-        print(f"  Note: Could not parse configuration values: {e}")
-    
-    return values
 
 
 def change_interface_description(connection, description):
@@ -428,7 +512,11 @@ def main():
     print("     Project Activity 5: NETCONF/YANG/Python Automation")
     print("     Device: IOS XR Platform")
     print("="*70)
-    
+
+    # IMPORTANT: Read last run's data BEFORE we overwrite the files
+    # We need to do this before get_running_config() overwrites config_before.xml
+    last_run_values = get_last_run_info()
+
     # Step 1: Connect to device
     connection = connect_to_device()
     if not connection:
@@ -438,12 +526,12 @@ def main():
         print("2. Verify DevNet Sandbox is active")
         print("3. Confirm credentials are correct")
         return
-    
-    # Step 2: Get BEFORE configuration
+
+    # Step 2: Get BEFORE configuration (this will overwrite config_before.xml)
     print("\n" + "─"*70)
     print("STEP 1: Verify Current Running Configuration (BEFORE)")
     print("─"*70)
-    config_before = get_running_config(connection, save_as='config_before.xml')
+    config_before = get_running_config(connection, save_as='config_before.xml', create_backup=True)
     interface_config_before = get_interface_config(connection)
     
     # Extract current interface values from the FULL running config (more reliable)
@@ -557,7 +645,7 @@ def main():
     print("\n" + "─"*70)
     print("STEP 3: Verify New Running Configuration (AFTER)")
     print("─"*70)
-    config_after = get_running_config(connection, save_as='config_after.xml')
+    config_after = get_running_config(connection, save_as='config_after.xml', create_backup=True)
     interface_config_after = get_interface_config(connection)
     
     # Extract after values from the FULL running config (more reliable)
@@ -567,6 +655,15 @@ def main():
     print("\n" + "="*70)
     print("BEFORE vs AFTER CONFIGURATION COMPARISON")
     print("="*70)
+
+    # Show comparison with last run if available
+    if last_run_values:
+        print("\n[PREVIOUS RUN'S BEFORE STATE]")
+        print(f"   Description: {last_run_values['description']}")
+        print(f"   State: {last_run_values['state']}")
+        print(f"   MTU: {last_run_values['mtu']}")
+        print()
+
     print(f"\nInterface: {INTERFACE_NAME}\n")
     print(f"[1] Description:")
     print(f"    BEFORE: {before_values['description']}")
@@ -577,20 +674,26 @@ def main():
     print(f"    BEFORE: {before_values['state']}")
     after_state_display = 'Enabled (no shutdown)' if not shutdown_value else 'Disabled (shutdown)'
     if state_success:
-        print(f"    AFTER:  {after_state_display}")
-        print(f"    Status: {'CHANGED' if before_values['state'] != after_state_display else 'NO CHANGE'}\n")
+        # Successfully changed - show the actual new state from device
+        print(f"    AFTER:  {after_values['state']}")
+        print(f"    Status: {'CHANGED' if before_values['state'] != after_values['state'] else 'NO CHANGE'}\n")
     else:
-        print(f"    AFTER:  {before_values['state']} (change not supported)")
+        # Change not supported - show what was attempted and current state
+        print(f"    ATTEMPTED: {after_state_display}")
+        print(f"    ACTUAL:    {after_values['state']} (change not supported by sandbox)")
         print(f"    Status: NOT SUPPORTED ON THIS SANDBOX\n")
-    
+
     print(f"[3] MTU Configuration:")
     print(f"    BEFORE: {before_values['mtu']}")
     if mtu_success:
         after_mtu = f"{mtu_value} bytes"
-        print(f"    AFTER:  {after_mtu}")
+        # Successfully changed - show the actual new MTU from device
+        print(f"    AFTER:  {after_values['mtu']}")
         print(f"    Status: {'CHANGED' if str(mtu_value) not in before_values['mtu'] else 'NO CHANGE'}\n")
     else:
-        print(f"    AFTER:  {before_values['mtu']} (change not supported)")
+        # Change not supported - show what was attempted and current state
+        print(f"    ATTEMPTED: {mtu_value} bytes")
+        print(f"    ACTUAL:    {after_values['mtu']} (change not supported by sandbox)")
         print(f"    Status: NOT SUPPORTED ON THIS SANDBOX\n")
     
     print("="*70)
